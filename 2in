@@ -1,0 +1,68 @@
+
+const fs = require("fs");
+const { join } = require("path");
+const { exec } = require("child_process");
+const { downloadMediaMessage } = require("@whiskeysockets/baileys");
+const { whatsappFake } = require("../helpers/fakeQuoted");
+
+module.exports = async (sock, msg, args, reply) => {
+  const from = msg.key.remoteJid;
+  const qmsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+  const type = Object.keys(qmsg || {})[0];
+  const supportedTypes = ['imageMessage', 'videoMessage'];
+
+  if (!supportedTypes.includes(type))
+    return reply(" Balas gambar/video yang ingin dijadikan stiker.\nContoh: .stiker");
+
+  try {
+    if (!fs.existsSync('./temp')) fs.mkdirSync('./temp');
+
+    const mediaBuffer = await downloadMediaMessage(
+      { message: { ...qmsg } },
+      "buffer",
+      {},
+      { logger: console }
+    );
+
+    const isVideo = type === 'videoMessage';
+    const input = join('./temp', `stik_in_${Date.now()}.${isVideo ? 'mp4' : 'jpg'}`);
+    const output = input.replace(/\.(jpg|mp4)/, ".webp");
+
+    fs.writeFileSync(input, mediaBuffer);
+
+    const ffmpegCmd = isVideo
+  ? `ffmpeg -i ${input} -vf "fps=15,scale=512:512:force_original_aspect_ratio=increase,crop=512:512" -vcodec libwebp -preset default -ss 0 -t 6 -an -loop 0 ${output}`
+
+  : `ffmpeg -i ${input} -vf "scale=512:512:force_original_aspect_ratio=increase,crop=512:512" -vcodec libwebp -lossless 1 -preset picture -an -vsync 0 ${output}`;
+
+
+    exec(ffmpegCmd, async (err) => {
+      if (err || !fs.existsSync(output)) {
+        console.error(" FFmpeg error:", err);
+        return reply("Gagal membuat stiker.");
+      }
+
+      const buffer = fs.readFileSync(output);
+      await sock.sendMessage(from, {
+        sticker: buffer,
+        contextInfo: {
+          externalAdReply: {
+            title: `Sticker`,
+            body: `Powered by MORI BOT`,
+            thumbnailUrl: 'https://files.catbox.moe/0z9zwv.jpg',
+            mediaType: 1,
+            renderLargerThumbnail: false,
+            sourceUrl: 'https://friart.com'
+          }
+        }
+      }, { quoted: whatsappFake });
+
+      fs.unlinkSync(input);
+      fs.unlinkSync(output);
+    });
+
+  } catch (err) {
+    console.error("Stiker Error:", err);
+    reply("Gagal memproses stiker.");
+  }
+};
